@@ -1,19 +1,18 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-using System.Data.SQLite;
 using Dapper;
-using System.Diagnostics;
-using System.ComponentModel;
-using System.Reflection;
 using System.IO;
+using System.Data.SQLite;
+using System.Windows;
+using System.Windows.Forms;
 
 namespace CaselyData {
-    public class PathCase {
+    public class CaselyUserData {
         public string CaseNumber { get; set; }
         public string Service { get; set; }
+        public string Evaluation { get; set; }
+        public string EvaluationComment { get; set; }
     }
     public class CaseEntry {
         string result = "";
@@ -52,13 +51,28 @@ namespace CaselyData {
                 TimeModifiedString = value.TimeOfDay.ToString();
             }
         }
+
+        public string ShortDateModifiedString {
+            get {
+                return DateTimeModifiedObject.ToShortDateString();
+            }
+        }
         public string AuthorID { get; set; }
         public List<PartEntry> ListPartEntry { get; set; }
 
-        public string PrettyVersion() {
-            return $"{AuthorID} ({DateModifiedString})";
-        }
+        public string toHtml() {
+            string htmlCaseEntry = $"<b>Final Report Author ID</b>: {AuthorID}";
+            htmlCaseEntry += $"<h3><u>Interpretation</u></h3><p>{Interpretation}</p>";
+            htmlCaseEntry += $"<h3><u>Material</u></h3><p>{Material}</p>";
+            htmlCaseEntry += $"<h3><u>History</u></h3><p>{History}</p>";
+            htmlCaseEntry += $"<h3><u>Gross</u></h3><p>{Gross}</p>";
+            htmlCaseEntry += $"<h3><u>Microscopic</u></h3><p>{Microscopic}</p>";
+            htmlCaseEntry += $"<h3><u>Tumor Synoptic</u></h3><p>{TumorSynoptic}</p>";
+            htmlCaseEntry += $"<h3><u>Comment</u></h3><p>{Comment}</p>";
+            htmlCaseEntry = "<head><style>P { white-space: pre; }</style></head>" + htmlCaseEntry;
 
+            return htmlCaseEntry.Replace("\n","<br>");
+        }
         private void PopulateMicrGrossMatHist() {
             List<string> sectionWords = new List<string> { "MATERIAL:", "HISTORY:", "GROSS:", "MICROSCOPIC:" };
             bool endOfResult = false;
@@ -162,22 +176,29 @@ namespace CaselyData {
     }
 
     public class Staff {
-        public string AuthorID;
-        public string firstLastName;
-        public string Role;
+        public string AuthorID { get; set; }
+        public string FirstLastName { get; set; }
+        public string Role { get; set; }
+        public override string ToString() {
+            return AuthorID;
+        }
     }
 
     public class SqliteDataAcces {
 
-        public static string CaseNumberPrefix = "SMP-18-";
+        public static string CaseNumberPrefix = "SMP-19-";
 
         
 
-        public static void InsertNewCaseEntry(CaseEntry ce, PathCase pathCase) {
+        public static void InsertNewCaseEntry(CaseEntry ce, CaselyUserData caselyUserData) {
             using (var cn = new SQLiteConnection(DbConnectionString)) {
-                var sql = @"INSERT INTO path_case (case_number, service)
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // this line is required to enable full text search support
+
+                var sql = @"INSERT INTO casely_user_data (case_number, service)
                              VALUES (@CaseNumber, @Service);";
-                cn.Execute(sql, pathCase);
+                cn.Execute(sql, caselyUserData);
                 sql = @"INSERT INTO case_entry (author_id, case_number, date_modified,
                                                 time_modified, tumor_synoptic, comment, result, material, history, interpretation, gross, microscopic)
                             VALUES (@AuthorID, @CaseNumber,@DateModifiedString,@TimeModifiedString,@TumorSynoptic, @Comment, @Result, @Material, @History, 
@@ -186,11 +207,47 @@ namespace CaselyData {
             }
         }
 
-        public static void InsertNewPartDiagnosisEntry(List<PartDiagnosis> ce, PathCase pathCase) {
+        public static void BatchInsertNewCaseEntry(List<CaseEntry> listCasesToInsert) {
+
             using (var cn = new SQLiteConnection(DbConnectionString)) {
-                var sql = @"INSERT INTO path_case (case_number, service)
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // this line is required to enable full text search support
+                var sqliteTransaction = cn.BeginTransaction();
+
+                foreach (var ce in listCasesToInsert) {
+                    var sql = @"INSERT INTO casely_user_data (case_number)
+                                 VALUES (@CaseNumber);
+
+                                INSERT INTO case_entry (author_id, case_number, date_modified,
+                                       time_modified, tumor_synoptic, comment, result, material, history, interpretation, gross, microscopic)
+                                VALUES (@AuthorID, @CaseNumber,@DateModifiedString,@TimeModifiedString,@TumorSynoptic, @Comment, @Result, @Material, @History, 
+                                        @Interpretation, @Gross, @Microscopic);";
+                    cn.Execute(sql, ce);
+                }
+                sqliteTransaction.Commit();
+
+            }
+        }
+
+        public static void UpdateCompletedCase(CaselyUserData caselyUserData) {
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var sql = @"UPDATE casely_user_data 
+                                SET case_number = @CaseNumber, service = @Service, evaluation = @Evaluation, evaluation_comment = @EvaluationComment
+                                WHERE case_number = @CaseNumber;";               
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // needed in order to modify the full text table
+                cn.Execute(sql, caselyUserData);
+                cn.Close();
+            }
+        }
+
+        public static void InsertNewPartDiagnosisEntry(List<PartDiagnosis> ce, CaselyUserData caselyUserData) {
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var sql = @"INSERT INTO casely_user_data (case_number, service)
                              VALUES (@CaseNumber, @Service);";
-                cn.Execute(sql, pathCase);
+                cn.Execute(sql, caselyUserData);
                 sql = @"INSERT INTO part_diagnosis ( case_number, part, date_modified, time_modified,
                                                 organ_system, organ, category, diagnosis, diagnosis_detailed)
                             VALUES (@CaseNumber, @Part, @DateModifiedString, @TimeModifiedString,@OrganSystem, @Organ, 
@@ -247,6 +304,18 @@ namespace CaselyData {
                
         }
 
+        public static List<CaselyUserData> GetAllCaselyUserData() {
+            var sql = @"SELECT case_number AS CaseNumber,
+                            service,
+                            evaluation,
+                            evaluation_comment AS EvaluationComment
+                            FROM casely_user_data;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var output = cn.Query<CaselyUserData>(sql, new DynamicParameters()).ToList();
+                return output;
+            }
+        }
+
         /// <summary>
         /// Returns true if there is at least 2 authors that have made a case entry on the given case
         /// </summary>
@@ -264,11 +333,11 @@ namespace CaselyData {
             }
         }
 
-        public static void InsertNewParts(List<PartEntry> parts, PathCase pathCase) {
+        public static void InsertNewParts(List<PartEntry> parts, CaselyUserData caselyUserData) {
             using (var cn = new SQLiteConnection(DbConnectionString)) {
-                var sql = @"INSERT INTO path_case (case_number, service)
+                var sql = @"INSERT INTO casely_user_data (case_number, service)
                              VALUES (@CaseNumber, @Service);";
-                cn.Execute(sql, pathCase);
+                cn.Execute(sql, caselyUserData);
                 sql = @"INSERT INTO part_entry (part, procedure,
                             specimen, date_modified, time_modified, case_number, author_id)
                             VALUES (@Part, @Procedure, @Specimen, @DateModifiedString,@TimeModifiedString, @CaseNumber, @AuthorID);";
@@ -276,8 +345,9 @@ namespace CaselyData {
             }
         }
 
+
         public static List<PartEntry> GetListPartEntryLatestVersion(string caseNumber) {
-            List<PartEntry> parts = getListPartEntry(caseNumber);
+            List<PartEntry> parts = GetListPartEntry(caseNumber);
             DateTime latestDateTimeModified = (from latestTimeModified in parts
                                                orderby latestTimeModified.DateTimeModifiedObject descending
                                                select latestTimeModified.DateTimeModifiedObject).FirstOrDefault();
@@ -313,8 +383,9 @@ namespace CaselyData {
             }
         }
 
-        public static List<CaseEntry> GetListCaseEntriesPastDays(DateTime startDate) {
-            var sql = @"SELECT case_number AS CaseNumber,
+        public static List<CaseEntry> GetListAllCaseEntries() {
+            var sql = @"SELECT * FROM (SELECT case_number AS CaseNumber,
+                        author_id AS AuthorID,
 	                    date_modified AS DateModifiedString,
 	                    time_modified AS TimeModifiedString,
 	                    tumor_synoptic AS TumorSynoptic,
@@ -324,21 +395,57 @@ namespace CaselyData {
 	                    history,
 	                    interpretation,
 	                    gross,
-	                    microscopic FROM case_entry WHERE date_modified >= @startDate
-                        GROUP BY case_number ";
-            var strStartDate = startDate.ToString("yyyy-MM-dd");
+	                    microscopic FROM case_entry 
+                                        ORDER BY DateModifiedString DESC,
+                                        TimeModifiedString DESC,
+                                        CaseNumber DESC)
+                                    GROUP BY CaseNumber
+                                    ORDER BY DateModifiedString DESC,
+                                    TimeModifiedString DESC, CaseNumber DESC;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 DynamicParameters dp = new DynamicParameters();
-                dp.Add("@startDate", strStartDate, System.Data.DbType.String);
-                var output = cn.Query<CaseEntry>(sql, dp).ToList();
+                var output = cn.Query<CaseEntry>(sql, new DynamicParameters()).ToList();
                 return output;
             }
         }
 
-
+        /// <summary>
+        /// Returns a list of all case entries entered after the supplied start_date.
+        /// </summary>
+        /// <param name="startDate"></param>
+        /// <returns></returns>
+        public static List<CaseEntry> FilterCaseEntryDateModified(DateTime startDate) {
+            var sql = @"SELECT * FROM (SELECT case_number AS CaseNumber,
+                        author_id AS AuthorID,
+	                    date_modified AS DateModifiedString,
+	                    time_modified AS TimeModifiedString,
+	                    tumor_synoptic AS TumorSynoptic,
+	                    comment,
+	                    result,
+	                    material,
+	                    history,
+	                    interpretation,
+	                    gross,
+	                    microscopic FROM case_entry 
+                        WHERE date_modified >= @startDate 
+                                        ORDER BY DateModifiedString DESC,
+                                        TimeModifiedString DESC,
+                                        CaseNumber DESC)
+                                    GROUP BY CaseNumber
+                                    ORDER BY DateModifiedString DESC,
+                                    TimeModifiedString DESC, CaseNumber DESC;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                DynamicParameters dp = new DynamicParameters();
+                // SqlLite requires date to be in year-month-day format for sorting purposes
+                dp.Add("@startDate", startDate.ToString("yyyy-MM-dd"), System.Data.DbType.String);
+                var output = cn.Query<CaseEntry>(sql, dp).ToList();
+                return output;
+            }
+        }
+        
       
 
-        public static List<PartEntry> getListPartEntry(string caseNumber) {
+        public static List<PartEntry> GetListPartEntry(string caseNumber) {
             var sql = @"SELECT author_id AS AuthorID, 
                             part, procedure,
                             specimen, 
@@ -353,9 +460,7 @@ namespace CaselyData {
             }
         }
 
-
-
-        public static List<CaseEntry> getListCaseEntry(string caseNumber) {
+        public static List<CaseEntry> GetCaseEntryFilterAuthorID(string authorID) {
             var sql = @"SELECT id,
 	                    author_id AS AuthorID,
 	                    case_number AS CaseNumber,
@@ -368,7 +473,29 @@ namespace CaselyData {
 	                    history,
 	                    interpretation,
 	                    gross,
-	                    microscopic FROM case_entry WHERE case_number = @caseNumber;";
+	                    microscopic FROM case_entry WHERE author_id = @authorID;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@authorID", authorID, System.Data.DbType.String);
+                var output = cn.Query<CaseEntry>(sql, dp).ToList();
+                return output;
+            }
+        }
+
+        public static List<CaseEntry> GetListCaseEntry(string caseNumber) {
+            var sql = @"SELECT id,
+	                    author_id AS AuthorID,
+	                    case_number AS CaseNumber,
+	                    date_modified AS DateModifiedString,
+	                    time_modified AS TimeModifiedString,
+	                    tumor_synoptic AS TumorSynoptic,
+	                    comment,
+	                    result,
+	                    material,
+	                    history,
+	                    interpretation,
+	                    gross,
+	                    microscopic FROM case_entry WHERE case_number = @caseNumber ORDER By DateModifiedString ASC, TimeModifiedString ASC;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 DynamicParameters dp = new DynamicParameters();
                 dp.Add("@caseNumber", caseNumber, System.Data.DbType.String);
@@ -377,8 +504,22 @@ namespace CaselyData {
             }
         }
 
+        public static CaselyUserData GetCaselyUserData(string caseNumber) {
+            var sql = @"SELECT 
+	                    case_number AS CaseNumber,
+	                    evaluation, 
+                        evaluation_comment AS EvaluationComment, 
+                        service FROM casely_user_data WHERE case_number = @caseNumber;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@caseNumber", caseNumber, System.Data.DbType.String);
+                var output = cn.Query<CaselyUserData>(sql, dp).ToList().FirstOrDefault();
+                return output;
+            }
+        }
+
         public static CaseEntry GetCaseEntryLatestVersion(string caseNumber) {
-            List<CaseEntry> cases = getListCaseEntry(caseNumber);
+            List<CaseEntry> cases = GetListCaseEntry(caseNumber);
             DateTime latestDateTimeModified = (from latestTimeModified in cases
                                                orderby latestTimeModified.DateTimeModifiedObject descending
                                                select latestTimeModified.DateTimeModifiedObject).FirstOrDefault();
@@ -391,24 +532,35 @@ namespace CaselyData {
             return latestCaseEntry;
         }
 
-        public static List<Staff> GetListStaff() {
-            var sql = @"SELECT full_name, role FROM staff;";
+        public static List<DateTime> GetCaseEntryListDateTimeModified(string caseNumber) {
+            var sql = @"select author_id, date_modified, time_modified from case_entry 
+                                                    WHERE case_number = @caseNumber
+                                        ORDER BY date_modified ASC,
+                                        time_modified ASC;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@caseNumber", caseNumber, System.Data.DbType.String);
+                var output = cn.Query(sql, dp).ToList();
+                var listDateTimeModified = new List<DateTime>();
+                for (int i =0; i < output.Count -1; i++) { // we want to skip the last entry, which is the attending's entry
+                    var data = (IDictionary<string, object>)output[i];
+                     listDateTimeModified.Add(DateTime.Parse(data["date_modified"].ToString() + " " + data["time_modified"].ToString()));
+                }
+                return listDateTimeModified;
+            }
+        }
+
+        public static List<Staff> GetListAuthor() {
+            var sql = @"SELECT author_id as AuthorID,
+                               last_first_name AS LastFirstName,
+                               role AS Role FROM staff;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 var output = cn.Query<Staff>(sql, new DynamicParameters()).ToList();
                 return output;
             }
         }
-
-        public static List<string> GetListStaffFullNames() {
-            var sql = @"SELECT last_first_name FROM staff;";
-            using (var cn = new SQLiteConnection(DbConnectionString)) {
-                var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
-                return output;
-            }
-        }
-
-
-        public static List<string> GetListProcedure() {
+              
+        public static List<string> GetUniqueProcedure() {
             var sql = @"SELECT procedure FROM procedure;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
@@ -416,7 +568,7 @@ namespace CaselyData {
             }
         }
 
-        public static List<string> GetListSpecimen() {
+        public static List<string> GetUniqueSpecimen() {
             var sql = @"SELECT specimen FROM specimen;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
@@ -424,7 +576,7 @@ namespace CaselyData {
             }
         }
 
-        public static List<string> GetListCategory() {
+        public static List<string> GetUniqueDiagnosticCategory() {
             var sql = @"SELECT category FROM diagnosis_category;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
@@ -432,13 +584,30 @@ namespace CaselyData {
             }
         }
 
-        public static List<string> GetListDiagnosis() {
+        public static List<string> GetUniqueDiagnosis() {
             var sql = @"SELECT diagnosis FROM diagnosis;";
             using (var cn = new SQLiteConnection(DbConnectionString)) {
                 var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
                 return output;
             }
         }
+
+        public static List<string> GetUniqueEvaluations() {
+            var sql = @"SELECT evaluation FROM evaluation;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
+                return output;
+            }
+        }
+
+        public static List<string> GetUniqueService() {
+            var sql = @"SELECT service FROM service;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var output = cn.Query<string>(sql, new DynamicParameters()).ToList();
+                return output;
+            }
+        }
+
 
         public static List<string> GetListOrgan() {
             var sql = @"SELECT organ FROM organ;";
@@ -456,6 +625,96 @@ namespace CaselyData {
             }
         }
 
+        public static int GetDatabaseVersion() {
+            var sql = @"PRAGMA user_version;";
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                var output = cn.Query<int>(sql, new DynamicParameters()).ToList().FirstOrDefault();
+                return output;
+            }
+        }
+
+        public static List<CaseEntry> FilterCaseEntryInterpretation(string strFilterInterpretation, string userID) {
+            return FilterCaseEntry(strFilterInterpretation, "fts5_case_entry_interpretation",  userID);
+        }
+
+        public static List<CaseEntry> FilterCaseEntryResult(string strFilterResult, string userID) {
+            return FilterCaseEntry(strFilterResult, "fts5_case_entry_result",  userID);
+        }
+
+        public static List<CaseEntry> FilterCaseEntryComment(string strFilterComment, string userID) {
+            return FilterCaseEntry(strFilterComment, "fts5_case_entry_comment",  userID);
+        }
+
+        public static List<CaseEntry> FilterCaseEntryTumorSynoptic(string strFilterTumorSynoptic, string userID) {
+            return FilterCaseEntry(strFilterTumorSynoptic, "fts5_case_entry_tumor_synoptic",  userID);
+        }
+        public static List<CaselyUserData> FilterCaseEntryEvaluationComment(string strFilterEvaluationComment) {
+            return FilterCaselyUserData(strFilterEvaluationComment, "fts5_casely_user_data_evaluation_comment");
+        }
+
+        /// <summary>
+        /// 
+        /// </summary>
+        /// <param name="strFilter"></param>
+        /// <param name="fts5TableName"></param>
+        /// <param name="userID">This UserID result is filtered out so that we only have results from the attendings</param>
+        /// <returns></returns>
+        private static List<CaseEntry> FilterCaseEntry(string strFilter, string fts5TableName, string userID) {
+            var sql = @"SELECT id,
+	                    case_entry.author_id AS AuthorID,
+	                    case_entry.case_number AS CaseNumber,
+	                    case_entry.date_modified AS DateModifiedString,
+	                    case_entry.time_modified AS TimeModifiedString,
+	                    case_entry.tumor_synoptic AS TumorSynoptic,
+	                    case_entry.comment,
+	                    case_entry.result,
+	                    case_entry.material,
+	                    case_entry.history,
+	                    case_entry.interpretation,
+	                    case_entry.gross,
+	                    case_entry.microscopic FROM " + fts5TableName.Trim() + @"
+                        INNER JOIN case_entry ON case_entry.case_number = " + fts5TableName.Trim() + @".case_number AND DateModifiedString = " + fts5TableName.Trim() 
+                        + @".date_modified AND TimeModifiedString = " + fts5TableName.Trim() + @".time_modified 
+                        WHERE " + fts5TableName.Trim() + " MATCH @strFilter AND case_entry.author_id != @userID;";
+
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // required extension in order to do FTS5 search
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@strFilter", strFilter, System.Data.DbType.String);
+                dp.Add("@userID", userID, System.Data.DbType.String);
+                var output = cn.Query<CaseEntry>(sql, dp).ToList();
+                cn.Close();
+                return output;
+            }
+        }
+
+        
+        /// <summary>
+        /// Uses an inner join in order to filter path cases and return the case_entry rows that satisfy  the casely_user_data filter
+        /// </summary>
+        /// <param name="strFilter"></param>
+        /// <param name="fts5TableName"></param>
+        /// <param name="userID"></param>
+        /// <returns></returns>
+        private static List<CaselyUserData> FilterCaselyUserData(string strFilter, string fts5TableName) {
+            var sql = @"SELECT casely_user_data.case_number AS CaseNumber 
+                        FROM " + fts5TableName.Trim() + @"
+                        INNER JOIN casely_user_data ON casely_user_data.case_number = " + fts5TableName.Trim() + @".case_number 
+                        WHERE " + fts5TableName.Trim() + " MATCH @strFilter";
+
+            using (var cn = new SQLiteConnection(DbConnectionString)) {
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // required extension in order to do FTS5 search
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@strFilter", strFilter, System.Data.DbType.String);
+                var output = cn.Query<CaselyUserData>(sql, dp).ToList();
+                cn.Close();
+                return output;
+            }
+        }
 
         public static string DbConnectionString {
             get {
@@ -466,26 +725,71 @@ namespace CaselyData {
 
         public static string DBPath {
             get {
-                var dbPath = Properties.Settings.Default.DatabasePath;
+                var  dbPath = Properties.Settings.Default.DatabasePath;
                 return dbPath;
             }
             set {
                 Properties.Settings.Default.DatabasePath = value;
+                Properties.Settings.Default.Save();
             }
 
         }
 
         /// <summary>
-        /// Creates the Casely database
+        /// Creates the Casely database or updates it to the latest version
         /// </summary>
-        public static void CreateDatabase() {
+        /// <returns>Returns true if the database is created AND up to date</returns>
+        public static bool CreateOrUpdateDatabase() {
+
+
             if (!(File.Exists(DBPath))) {
-               var f = File.Create(DBPath);
-                f.Close();
+                MessageBoxResult dialogResult = System.Windows.MessageBox.Show($"Casely database does not exist at {SqliteDataAcces.DBPath}. Should it be created?", "Create Database", MessageBoxButton.YesNo, MessageBoxImage.None);
+                if (dialogResult == MessageBoxResult.No) {
+                    return false;                   
+                }
+                if (Directory.Exists(Path.GetDirectoryName(DBPath))) {
+                    var f = File.Create(DBPath);
+                    f.Close();
+                    // Create the initial database
+                    executeCommand(DBCreationString.dictSQVersion[0]);
+                } else {
+                    System.Windows.Forms.MessageBox.Show($"Could not create database at {SqliteDataAcces.DBPath}. Does the folder exist?","",System.Windows.Forms.MessageBoxButtons.OK,System.Windows.Forms.MessageBoxIcon.Error);
+                    return false;
+                }
+              
             }
-            
+            int currentDBVersion = GetDatabaseVersion();
+            List<int> versions = DBCreationString.dictSQVersion.Keys.AsList();
+            if (currentDBVersion > versions.Max()) {
+                System.Windows.MessageBox.Show($"Database version is new than the current version of Casely. Please open this database with the latest version of Casely. \nCurrent DB version {currentDBVersion}\nDB version supported {versions.Max()}","", MessageBoxButton.OK,MessageBoxImage.Error);
+                return false;
+            }
+
+
+            var dbUpdateToRun = versions.Where(x => x > currentDBVersion).ToList();
+            if (dbUpdateToRun.Count > 0) {
+                MessageBoxResult dialogResult = System.Windows.MessageBox.Show($"This version of Casely requires an update to your database. OK to proceed?", "", MessageBoxButton.YesNo, MessageBoxImage.Information);
+                if (dialogResult == MessageBoxResult.No) {
+                    return false;
+                }
+                // Incrementally runs each update string until the database is up to date.
+                foreach (var v in dbUpdateToRun) {
+                    executeCommand(DBCreationString.dictSQVersion[v]);
+                    executeCommand($"PRAGMA user_version={v};" );
+                }
+                return true;
+            }
+            return true;
+           
+        }
+
+        private static void executeCommand(string sql) {
             using (var cn = new SQLiteConnection(DbConnectionString)) {
-                cn.Execute(DBCreationString.sqlCreateDBString);
+                cn.Open();
+                cn.EnableExtensions(true);
+                cn.LoadExtension("SQLite.Interop.dll", "sqlite3_fts5_init"); // needed in order to modify the full text table
+                cn.Execute(sql);
+                cn.Close();
             }
         }
 
@@ -493,14 +797,17 @@ namespace CaselyData {
         /// Inserts a new pathology case into the database.
         /// Case number must be unique. If not unique, insertion will be ignored by sqlite database.
         /// </summary>
-        /// <param name="pathCase"></param>
-        public static void InsertNewPathCase(PathCase pathCase) {
+        /// <param name="caselyUserData"></param>
+        public static void InsertNewCaselyUserData(CaselyUserData caselyUserData) {
             using (var cn = new SQLiteConnection(DbConnectionString)) {
-                var sql = @"INSERT INTO path_case (case_number, service) VALUES (@CaseNumber, @Service);";
-                var result = cn.Execute(sql, pathCase );
+                var sql = @"INSERT INTO casely_user_data (case_number, service) VALUES (@CaseNumber, @Service);";
+                DynamicParameters dp = new DynamicParameters();
+                dp.Add("@CaseNumber", caselyUserData.CaseNumber, System.Data.DbType.String);
+                dp.Add("@Service", caselyUserData.Service, System.Data.DbType.String);
+                var result = cn.Execute(sql, dp);
             }
         }
-
+        
     }
 
 }

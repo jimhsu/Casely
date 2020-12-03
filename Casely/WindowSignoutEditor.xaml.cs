@@ -25,6 +25,12 @@ namespace Casely {
         public WindowReportEditor() {
             InitializeComponent();
             txtCaseNumber.Text = SqliteDataAcces.CaseNumberPrefix;
+            foreach (var a in SqliteDataAcces.GetListAuthor()) {
+                cmbAuthor.Items.Add(a.AuthorID);
+            }
+            foreach (var a in SqliteDataAcces.GetUniqueService()) {
+                cmbService.Items.Add(a);
+            }
 
         }
 
@@ -36,7 +42,7 @@ namespace Casely {
             } else if (cmbAuthor.Text == "") {
                 MessageBox.Show("Please choose an author");
             } else {
-                PathCase pc = new PathCase();
+                CaselyUserData pc = new CaselyUserData();
                 pc.CaseNumber = txtCaseNumber.Text;
                 pc.Service = cmbService.Text;
                 CaseEntry ce = new CaseEntry();
@@ -56,7 +62,6 @@ namespace Casely {
                 txtTumorSynoptic.Text = "";
                 txtCaseNumber.Text = SqliteDataAcces.CaseNumberPrefix;
                 MessageBox.Show("Case Added");
-                cmbAuthor.ItemsSource = SqliteDataAcces.GetListStaffFullNames();
                 dtCreated.Value = DateTime.Now;
 
             }
@@ -73,7 +78,6 @@ namespace Casely {
         }
 
         private void Window_Loaded(object sender, RoutedEventArgs e) {
-            cmbAuthor.ItemsSource = SqliteDataAcces.GetListStaffFullNames();
             dtCreated.Value = DateTime.Now;
         }
 
